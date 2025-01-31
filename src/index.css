@@ -11,6 +11,7 @@ body {
     text-align: center;
     font-size: 1.3rem; 
     background: linear-gradient(90deg, #007acc, #007acc);
+    background-clip: text;
     -webkit-background-clip: text;
     -webkit-text-fill-color: transparent;
     margin: 0px;
