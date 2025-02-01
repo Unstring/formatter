@@ -179,7 +179,7 @@ export default function CodeEditor() {
     }
   }, [activeFile, handleEditorChange, getFileExtension]);
 
-  // Update the initialization effect
+  // Update the initialization effect to properly handle file order
   useEffect(() => {
     let mounted = true;
 
@@ -195,29 +195,36 @@ export default function CodeEditor() {
         console.log('Loaded metadata:', meta);
         
         // Load files with order from metadata
-        const savedFiles = await loadFilesFromDB(database, meta?.fileOrder);
+        const savedFiles = await loadFilesFromDB(database);
         console.log('Loaded files from DB:', savedFiles);
         
         if (!mounted) return;
 
         if (savedFiles.length > 0) {
-          setFiles(savedFiles);
-          // Use metadata for active file if available
-          if (meta?.activeFileId && savedFiles.find(f => f.id === meta.activeFileId)) {
+          // Sort files according to fileOrder if it exists
+          const orderedFiles = meta?.fileOrder 
+            ? meta.fileOrder
+                .map(id => savedFiles.find(f => f.id === id))
+                .filter((f): f is File => f !== undefined)
+            : savedFiles;
+
+          setFiles(orderedFiles);
+          
+          // Set active file from metadata or default to first file
+          if (meta?.activeFileId && orderedFiles.find(f => f.id === meta.activeFileId)) {
             setActiveFileId(meta.activeFileId);
           } else {
-            setActiveFileId(savedFiles[0].id);
+            setActiveFileId(orderedFiles[0].id);
           }
         } else {
           const newFile = createNewFile(DEFAULT_FILE_NAME);
           setFiles([newFile]);
           setActiveFileId(newFile.id);
           await saveFileToDB(database, newFile);
-          // Initialize metadata with history
           await saveMetaToDB(database, {
             id: "fileMeta",
             activeFileId: newFile.id,
-            history: [newFile.id],
+            history: [],
             fileOrder: [newFile.id],
           });
         }
@@ -375,7 +382,7 @@ export default function CodeEditor() {
     };
   };
 
-  // Update deleteFile function
+  // Update deleteFile to properly handle history
   const deleteFile = useCallback(async (fileId: string) => {
     console.log('Deleting file:', fileId);
     if (files.length <= 1) {
@@ -386,19 +393,23 @@ export default function CodeEditor() {
     if (!db) return;
 
     try {
-      // Get current metadata
       const meta = await loadMetaFromDB(db);
-      // Get history without the file being deleted
-      const history = meta?.history.filter(id => id !== fileId) || [];
       const updatedFiles = files.filter(f => f.id !== fileId);
-
+      const updatedFileOrder = meta?.fileOrder.filter(id => id !== fileId) || updatedFiles.map(f => f.id);
+      
       // If deleting active file
       if (activeFileId === fileId) {
-        // Get the previous file from history (second last entry, since last is current)
-        const previousFileId = history[history.length - 2] || history[history.length - 1] || updatedFiles[0].id;
+        // Get the previous file from history
+        const history = meta?.history || [];
+        // Find the most recent file from history that still exists
+        const previousFileId = history
+          .slice()
+          .reverse()
+          .find(id => id !== fileId && updatedFiles.some(f => f.id === id)) || updatedFiles[0].id;
+        
         console.log('Switching to previous file:', previousFileId);
         
-        // Switch to the previous file
+        // Load the previous file content
         const transaction = db.transaction(FILES_STORE, "readonly");
         const store = transaction.objectStore(FILES_STORE);
         const request = store.get(previousFileId);
@@ -425,8 +436,8 @@ export default function CodeEditor() {
         await saveMetaToDB(db, {
           id: "fileMeta",
           activeFileId: previousFileId,
-          history: history.filter(id => id !== previousFileId).concat([previousFileId]), // Move previous to end
-          fileOrder: updatedFiles.map(f => f.id),
+          history: meta?.history.filter(id => id !== fileId && id !== previousFileId).concat([previousFileId]) || [previousFileId],
+          fileOrder: updatedFileOrder,
         });
       } else {
         // Just deleting an inactive file
@@ -434,8 +445,8 @@ export default function CodeEditor() {
         await saveMetaToDB(db, {
           id: "fileMeta",
           activeFileId,
-          history,
-          fileOrder: updatedFiles.map(f => f.id),
+          history: meta?.history.filter(id => id !== fileId) || [],
+          fileOrder: updatedFileOrder,
         });
       }
 
